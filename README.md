@@ -1,98 +1,163 @@
 # Compute Plug IDE
 
-> **Hardware-Bound Remote Backend for Air-Gapped Environments**
+> **A USB-attached remote development backend for air-gapped environments.**
 
+**Status: architectural specification. No prototype code yet.** This repo
+documents a design and the open questions around it. Treat every hardware
+and performance figure below as a target to validate, not a measured result.
 
-## 1. Executive Summary
+## 1. The Problem
 
-Modern development teams are rapidly adopting client-server IDE architectures (such as JetBrains Gateway and Fleet) and AI-assisted workflows. However, regulated and air-gapped environments—such as defense contractors, financial institutions, intelligence labs, healthcare providers, and high-security R&D facilities—are structurally blocked from adopting these tools.
+Client-server IDEs (JetBrains Gateway / Remote Development, for example)
+let a thin client drive a backend that does the heavy lifting. They assume
+the client can reach that backend over a network.
 
-These environments operate under strict zero-trust policies:
-1. **No external network connectivity** or cloud API access is permitted.
-2. **Code assets and build artifacts cannot touch unencrypted host filesystems.**
-3. **Gateways that rely on an "always-reachable remote server" fail** when local subnet routes are restricted.
+Regulated and air-gapped environments (defense, finance, healthcare,
+secure R&D labs) often cannot grant that:
 
-### The Solution
-The **Compute Plug IDE** shifts the transport boundary of decoupled IDEs. Rather than reaching across a local network or cloud link to connect to a server, the entire backend—including execution runtimes, indexing engines, and a 1–3B parameter local AI coding assistant—is packaged inside a **bus-powered USB-C hardware appliance**.
+1. No external connectivity, so no cloud APIs and no cloud AI assistants.
+2. Source and build artifacts must not land on unmanaged host filesystems.
+3. Developers move between locked-down machines with inconsistent toolchains.
 
-The host computer acts purely as a thin-client rendering interface, requiring **zero installation**, **zero host-side drivers**, and **zero network trust**.
+## 2. The Idea
 
----
+Keep the client-server model, but change the transport. Instead of a
+remote server reached over a network, the backend lives inside a
+bus-powered USB-C appliance. The host sees a virtual network adapter and
+talks to the backend over a private point-to-point link. Source code,
+toolchains, indexes, and a small local AI model stay on the device.
 
-## 2. System Architecture
+This is not a new IDE architecture. It is a new physical deployment target
+for an existing one.
+
+## 3. Client Modes (and what "zero install" really means)
+
+| Mode | Host requirement | Status |
+|---|---|---|
+| **A. JetBrains Client** (Gateway / Toolbox launch) | JetBrains Client installed on the host, pre-approved by IT | Closest to existing JetBrains remote development; the device would act as the Linux backend |
+| **B. Browser frontend** | A browser only | Experimental. Not an existing JetBrains product; would need a separate web IDE layer and has weaker feature parity |
+
+Mode A is the credible path for JetBrains-style IDE features, but it means
+a client install on the host. Mode B delivers true zero-install but is a
+different, lighter experience. The project should be explicit about this
+tradeoff rather than claim both at once.
+
+## 4. Architecture
 
 ```
-+---------------------------------------------------------------------------------+
-|                           COMPUTE PLUG (USB-C DEVICE)                           |
-|                                                                                 |
-|  +-----------------------+     +------------------------+     +---------------+ |
-|  |   USB-C Controller    |     |     ARM/RISC-V SoC     |     |   High-IOPS   | |
-|  |  (USB-NCM / CDC-EEM   | <-> |     Hybrid Engine      | <-> |  NVMe / UFS   | |
-|  |    / USB-PD 15W+)     |     |   (JVM + Fleet LSPs)   |     |    Storage    | |
-|  +-----------------------+     +------------------------+     +---------------+ |
-|              |                             |                                    |
-+--------------|-----------------------------|------------------------------------+
-               |                             |
-    (Virtual Ethernet / IP)     (Onboard NPU coprocessor)
-               |                             |
-               v                             v
-     +-------------------+       +-----------------------------------------------+
-     |   HOST MACHINE    |       |          Lightweight Local Assistant          |
-     | (Thin client /    |       | (1–3B model: completion, lint explanations,   |
-     | browser frontend) |       |  simple rewrites — NOT full agentic tools)    |
-     +-------------------+       +-----------------------------------------------+
++-----------------------------------------------------------------+
+|                  COMPUTE PLUG (USB-C DEVICE)                    |
+|                                                                 |
+|  +---------------+   +----------------------+   +------------+  |
+|  | USB gadget    |   | ARM SoC, embedded    |   | Encrypted  |  |
+|  | (CDC-NCM /    |<->| Linux                |<->| NVMe / UFS |  |
+|  |  ECM)         |   | Headless IDE backend |   | storage    |  |
+|  +---------------+   | + LSP servers        |   +------------+  |
+|         |            +----------+-----------+                   |
++---------|-----------------------|-------------------------------+
+          |                       |
+ (virtual Ethernet,        (NPU or CPU inference)
+  private link address)            |
+          v                        v
+   +-------------+        +----------------------------+
+   | HOST        |        | Small local code model     |
+   | thin client |        | (completion, lint help,    |
+   +-------------+        |  small rewrites only)      |
+                          +----------------------------+
 ```
 
-### Key Subsystem Specifications
+### A. USB interface
+- Linux USB gadget mode (`libcomposite`) presenting a virtual Ethernet
+  adapter. CDC-NCM and ECM are preferred over legacy RNDIS for driverless
+  operation on current Windows, macOS, Linux, and iPadOS.
+- The link uses a private address (for example `192.168.7.1`), not
+  loopback.
 
-#### A. Hardware Interface Layer
-* **Protocol Standard:** Driverless USB-NCM (Network Control Model) and CDC-EEM over legacy RNDIS to ensure out-of-the-box operation on modern Windows, macOS, Linux, and iPadOS without admin privileges.
-* **Power Envelope:** USB Power Delivery (USB-PD) negotiating 15W+ (5V/3A or 9V/2A) from host ports to maintain clock speeds under heavy loads.
-* **Thermal Dissipation:** Aluminum CNC enclosure acting as a passive heatsink, paired with internal copper vapor-chamber spreaders to prevent throttling.
+### B. Enterprise enrollment
+- The device should be easy for IT to **enroll and allow-list** (stable
+  device identity, signed firmware, documented USB class behavior).
+- It is not designed to evade endpoint security or USB controls. In a
+  regulated environment, working with the policy is the only viable path.
 
-#### B. Hybrid Engine & Storage Architecture
-* **Storage:** Onboard NVMe (PCIe Gen3/4 x2) or UFS 3.1 storage to sustain high random 4K IOPS required for background indexing and build tasks.
-* **Multi-Tier Language Execution:**
-  * **JVM Languages (Java / Kotlin / Scala):** Headless IntelliJ Platform backend.
-  * **Non-JVM Languages (ArkTS / Rust / C / C++ / Python):** Lightweight Rust-native analysis engines and standard LSPs modeled on Fleet.
+### C. Backend
+- JVM languages: a headless JetBrains IDE backend, as used by Remote
+  Development.
+- Other languages: standard Language Server Protocol servers.
+- Toolchains (JDKs, SDKs, compilers) are baked into the image so the
+  environment is identical wherever the device is plugged in.
+- Open question: Gateway documents Linux servers as supported backends;
+  whether the current IDE backends run well on the aarch64 Linux this
+  hardware would use must be verified.
 
-#### C. Air-Gapped On-Device AI Assistant
-* **Hardware:** Dedicated NPU block integrated within the SoC (e.g., RK3588 NPU, Ascend NPU IP, or Apple-class Neural Engine).
-* **Model Execution:** 1B–3B parameter quantized FP16/INT4 model (e.g., Qwen-Coder, DeepSeek-Coder) optimized for offline inline completions, lint diagnostics, and single-file rewrites.
+### D. Local AI assistance
+- First candidate: **Mellum-all**, JetBrains' open-source code-completion
+  model, run through a local runtime. Alternatives to benchmark: small
+  code-tuned models such as Qwen-Coder.
+- Scope: inline completion, lint explanations, single-file rewrites.
+  **Not** multi-file agentic workflows; small on-device models cannot
+  match cloud agents there.
+- **Optional cloud bridge** (off by default, explicit and auditable
+  toggle): when network policy allows, escalate a failing file plus
+  stack trace to a cloud model through bounded tool calls. The air-gapped
+  case never depends on it.
+
+## 5. Open Questions (unproven)
+
+1. Can a full IDE backend (indexing, code analysis, builds) run acceptably
+   inside the power, memory, and thermal budget of a bus-powered device?
+   This is the first thing to measure.
+2. What sustained power can a typical locked-down laptop port actually
+   deliver, and how does throttling behave under indexing load?
+3. Which local model gives usable completion latency on the chosen
+   NPU/CPU, and at what quality?
+4. How much IDE plugin functionality survives in a headless backend?
+
+## 6. Risks
+
+| Risk | Mitigation direction |
+|---|---|
+| Backend memory footprint on small hardware | Measure early; fall back to LSP-only mode for lighter languages |
+| Flash wear from indexing and builds | Require NVMe/UFS with wear-leveling; avoid SD/eMMC |
+| Thermal throttling in a small enclosure | Prototype thermal testing before any enclosure design |
+| USB policy blocks in managed fleets | Standard device classes, signed firmware, IT enrollment workflow |
+| Local model quality ceiling | Tiered design: local for fast/simple, optional cloud for deep tasks |
+| Overlap with existing JetBrains remote-dev tooling | Position as a deployment target for it, not a competitor |
+
+## 7. Prototype Plan
+
+1. **Weeks 1-4:** USB gadget mode on a Raspberry Pi Zero 2 W or Radxa
+   Zero serving a minimal web page to Windows, macOS, and Linux hosts
+   with no drivers. Then attempt a headless backend and Mode A client
+   connection.
+2. **Weeks 5-8:** Measure memory, indexing time, link latency, power draw.
+   Publish the numbers, including the unflattering ones.
+3. **Weeks 9-12:** Add local model completion, then the optional cloud
+   bridge. Record a demo that works with the network unplugged.
+
+## 8. Related Products
+
+- **JetBrains Gateway / Remote Development:** the model this project
+  extends to a USB-attached backend.
+- **Mellum:** JetBrains' completion model, used here as the preferred
+  local model candidate.
+- **Fleet:** discontinued by JetBrains in December 2025, so this project
+  does not depend on it. Components and ideas from it live on in other
+  JetBrains tooling, including the newer agentic tool Air (in preview).
+
+## 9. License
+
+Copyright 2026 Ashwin H. Code is licensed under the Apache License 2.0 (see `LICENSE`).
+Hardware designs, when added: CERN-OHL-W v2.
+Model weights keep their own upstream licenses.
+
+## 10. Contributing
+
+Early stage. The most useful contributions right now are measurements:
+backend footprint on small ARM boards, USB gadget behavior on locked-down
+hosts, and local model latency numbers.
 
 ---
 
-## 3. Data Flow & Workflow Iteration
-
-1. **Connection:**  
-   Developer plugs the appliance into a host USB-C port. The operating system enumerates a standard network adapter over USB-NCM and assigns a local loopback IP (e.g., `192.168.7.1`).
-
-2. **Session Launch:**  
-   The developer launches a thin client (Gateway client shell or WebAssembly browser frontend) pointing to the device's local socket.
-
-3. **Isolated Execution (`Edit` -> `Build` -> `Test`):**  
-   * All source code changes are saved directly into the encrypted NVMe storage on the stick. No host disk access is required.
-   * Compilations, test runners, and static analysis execute inside the device's embedded Linux environment (Buildroot/Yocto).
-
-4. **Optional Cloud Bridge (Opt-In):**  
-   * **Default State:** 100% offline local inference via onboard NPU.
-   * **Non-Air-Gapped Toggle:** When network policy permits, the user can toggle a cloud bridge to delegate complex multi-file fixes to JetBrains AI Assistant or a remote LLM API via bounded tool calling.
-
----
-
-## 4. Technical Risks & Mitigation Strategy
-
-| Identified Technical Risk | Mitigation Strategy |
-| :--- | :--- |
-| **JVM Memory Footprint** | Deploy a hybrid engine: JVM for Java/Kotlin, Fleet-based LSPs for lightweight languages. |
-| **Flash Wear via Indexing** | Enforce wear-leveling algorithms; mandate NVMe or UFS storage over cheap eMMC/SD flash. |
-| **Thermal Throttling** | Aluminum chassis heatsink + USB-PD 15W power negotiation to maintain sustainable clock rates. |
-| **EDR / Enterprise Security Blocks** | Utilize signed hardware certificates and standard USB-NCM class definitions to bypass USB blocks. |
-
----
-
-## 5. Summary for Product Leadership
-
-The Compute Plug IDE does not require inventing a new IDE architecture. It extends JetBrains Gateway and Fleet principles to physical hardware. 
-
-By productizing this specification, platform vendors can instantly unlock monetization in defense, intelligence, financial, and healthcare software development sectors that are currently off-limits to cloud-based remote development tools.
+*JetBrains, IntelliJ, Gateway, and Mellum are trademarks of JetBrains s.r.o.
+This is an independent project and is not affiliated with or endorsed by
+JetBrains.*
