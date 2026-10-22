@@ -34,7 +34,7 @@ for an existing one.
 
 | Mode | Host requirement | Status |
 |---|---|---|
-| **A. JetBrains Client** (Gateway / Toolbox launch) | JetBrains Client installed on the host, pre-approved by IT | Closest to existing JetBrains remote development; the device would act as the Linux backend |
+| **A. JetBrains Client** (Gateway / Toolbox launch) | JetBrains Client installed on the host, pre-approved by IT | Closest to existing JetBrains remote development; the device would act as the Linux [...] |
 | **B. Browser frontend** | A browser only | Experimental. Not an existing JetBrains product; would need a separate web IDE layer and has weaker feature parity |
 
 Mode A is the credible path for JetBrains-style IDE features, but it means
@@ -146,8 +146,7 @@ tradeoff rather than claim both at once.
 
 ## 9. License
 
-Copyright 2026 Ashwin H. Code is licensed under the Apache License 2.0 (see `LICENSE`).
-Hardware designs, when added: CERN-OHL-W v2.
+Copyright 2026 Ashwin H. Code is licensed under the [Apache License 2.0](LICENSE). Hardware designs, when added: CERN-OHL-W v2.
 Model weights keep their own upstream licenses.
 
 ## 10. Contributing
