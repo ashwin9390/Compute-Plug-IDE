@@ -34,7 +34,7 @@ for an existing one.
 
 | Mode | Host requirement | Status |
 |---|---|---|
-| **A. JetBrains Client** (Gateway / Toolbox launch) | JetBrains Client installed on the host, pre-approved by IT | Closest to existing JetBrains remote development; the device would act as the Linux [...] |
+| **A. JetBrains Client** (Gateway / Toolbox launch) | JetBrains Client installed on the host, pre-approved by IT | Closest to existing JetBrains remote development; the device would act as the Linux backend |
 | **B. Browser frontend** | A browser only | Experimental. Not an existing JetBrains product; would need a separate web IDE layer and has weaker feature parity |
 
 Mode A is the credible path for JetBrains-style IDE features, but it means
@@ -101,7 +101,52 @@ tradeoff rather than claim both at once.
   stack trace to a cloud model through bounded tool calls. The air-gapped
   case never depends on it.
 
-## 5. Open Questions (unproven)
+## 5. Source Sync and Package Integrity
+
+The device is a working copy, not the system of record. Authoritative
+repositories stay on the organization's side of the boundary, and the
+device exchanges changes with them through a controlled, verifiable
+process. **This is a design proposal; none of it is implemented yet.**
+
+**Source code**
+- Real Git repositories live on the device, so history, branching, and
+  merges behave as developers expect.
+- Changes cross the boundary as **signed Git bundles**: single files that
+  can travel through whatever transfer channel site policy approves. No
+  network path to the authoritative repo is required.
+- **Inbound:** verify the bundle signature against trust anchors pinned
+  on the device, run Git's bundle verification, fetch into a quarantine
+  namespace, check commit signatures against an allowed-signers list,
+  then a person approves the merge. Nothing merges automatically.
+- **Outbound:** incremental bundles from the last acknowledged sync
+  point, signed with a device key. Force-updates of synced refs are
+  disallowed; divergence is resolved with normal merges.
+- **Integrity over time:** signed commits and tags, plus a hash-chained
+  sync ledger on the device recording every import and export.
+
+**Dependencies**
+- A read-only local mirror of needed packages (Maven, npm, PyPI),
+  populated only from signed snapshots built on the connected side from
+  project lockfiles, then imported through the same verified path.
+- Lockfiles with integrity hashes where the ecosystem supports them, so a
+  mismatch fails the build. Versioned snapshots allow rollback, and the
+  snapshot date is visible so developers can see how stale it is.
+
+**Low-connectivity and travel use (secondary)**
+A laptop with a local clone can already work offline. The device adds a
+consistent toolchain and keeps source off the host. For this case it
+works as store-and-forward: changes queue on the device, and when
+connectivity returns and policy allows, the user explicitly triggers a
+sync. There is no background sync by default. The air-gapped case remains
+the primary target.
+
+**Not solved yet:** which transfer channels real sites approve, key
+custody and rotation, how large monorepos, submodules, and Git LFS
+objects behave in bundles, and how review fits existing change control.
+Remote wipe is impossible in an air gap, so device loss costs unsynced
+work. Regular exports and a stated maximum unsynced window matter.
+
+## 6. Open Questions (unproven)
 
 1. Can a full IDE backend (indexing, code analysis, builds) run acceptably
    inside the power, memory, and thermal budget of a bus-powered device?
@@ -112,7 +157,7 @@ tradeoff rather than claim both at once.
    NPU/CPU, and at what quality?
 4. How much IDE plugin functionality survives in a headless backend?
 
-## 6. Risks
+## 7. Risks
 
 | Risk | Mitigation direction |
 |---|---|
@@ -122,8 +167,10 @@ tradeoff rather than claim both at once.
 | USB policy blocks in managed fleets | Standard device classes, signed firmware, IT enrollment workflow |
 | Local model quality ceiling | Tiered design: local for fast/simple, optional cloud for deep tasks |
 | Overlap with existing JetBrains remote-dev tooling | Position as a deployment target for it, not a competitor |
+| Source drift or tampering across the sync boundary | Signed bundles and commits, quarantine import, hash-chained sync ledger |
+| Stale or tampered dependencies | Signed snapshots, lockfile integrity hashes, visible snapshot date, rollback |
 
-## 7. Prototype Plan
+## 8. Prototype Plan
 
 1. **Weeks 1-4:** USB gadget mode on a Raspberry Pi Zero 2 W or Radxa
    Zero serving a minimal web page to Windows, macOS, and Linux hosts
@@ -133,8 +180,11 @@ tradeoff rather than claim both at once.
    Publish the numbers, including the unflattering ones.
 3. **Weeks 9-12:** Add local model completion, then the optional cloud
    bridge. Record a demo that works with the network unplugged.
+4. **Weeks 13-16:** Signed bundle round trip (export, verify, import)
+   against a reference repository, plus a read-only dependency mirror
+   populated from a signed snapshot.
 
-## 8. Related Products
+## 9. Related Products
 
 - **JetBrains Gateway / Remote Development:** the model this project
   extends to a USB-attached backend.
@@ -144,12 +194,13 @@ tradeoff rather than claim both at once.
   does not depend on it. Components and ideas from it live on in other
   JetBrains tooling, including the newer agentic tool Air (in preview).
 
-## 9. License
+## 10. License
 
-Copyright 2026 Ashwin H. Code is licensed under the [Apache License 2.0](LICENSE). Hardware designs, when added: CERN-OHL-W v2.
+Copyright 2026 Ashwin H. Code is licensed under the [Apache License 2.0](LICENSE).
+Hardware designs, when added: CERN-OHL-W v2.
 Model weights keep their own upstream licenses.
 
-## 10. Contributing
+## 11. Contributing
 
 Early stage. The most useful contributions right now are measurements:
 backend footprint on small ARM boards, USB gadget behavior on locked-down

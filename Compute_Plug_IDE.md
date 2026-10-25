@@ -1,7 +1,7 @@
 # Compute Plug IDE: A Hardware-Bound Remote Backend for Air-Gapped Environments
 
 **White paper and architectural reference design**
-**Version:** 1.1.0 (revision of 1.0.0) | **Date:** October 2026
+**Version:** 1.2.0 (adds source sync and package integrity) | **Date:** October 2026
 **Author:** Ashwin H (GitHub: ashwin9390)
 **Status:** Architectural specification. No prototype exists yet. Every
 hardware and performance figure is a target to validate, not a measurement.
@@ -159,7 +159,102 @@ policy will not be adopted.
 
 ---
 
-## 6. Risks and Open Questions
+## 6. Source Sync, Package Integrity, and Low-Connectivity Use
+
+The device is a working copy, not the system of record. Authoritative
+repositories stay on the organization's side of the boundary, and the
+device exchanges changes with them through a controlled, verifiable
+process. This section is a design proposal; none of it is implemented.
+
+### 6.1 Sync model
+
+- Real Git repositories on the device, so history, branching, and merges
+  behave as developers expect.
+- Changes cross the boundary as **Git bundles**: single files containing
+  commits, easy to carry through whatever channel site policy approves
+  (reviewed removable media, a one-way gateway, or similar). The device
+  needs no network path to the authoritative repository.
+- Bundles are incremental, containing only commits since the last
+  acknowledged sync point.
+
+### 6.2 Inbound path (into the device)
+
+1. The bundle arrives with a detached signature and a manifest
+   (repository, ref tips, base commit, timestamp).
+2. The device verifies the signature against trust anchors pinned on it.
+3. The device runs Git's bundle verification, which confirms the bundle
+   is well-formed and its prerequisite commits are present.
+4. Contents are fetched into a quarantine namespace, never directly into
+   working branches.
+5. Commit signatures are checked against an allowed-signers list. Under
+   strict policy, unsigned commits or unknown signers are rejected.
+6. A person approves the merge. Nothing merges automatically.
+
+### 6.3 Outbound path
+
+- The device creates an incremental bundle from its last acknowledged
+  sync point, signed with a device key and accompanied by a manifest.
+- Developers sign their own commits. The device key attests to the bundle,
+  not to authorship of its contents.
+- The receiving side verifies, reviews, and merges under its own process.
+- Force-updates of synced refs are disallowed. Divergence is surfaced and
+  resolved with ordinary merges, never silent overwrite.
+
+### 6.4 Integrity over time
+
+- Signed commits and tags establish authorship and release points.
+- A **sync ledger** on the device records every import and export
+  (manifest hash, signer, time, ref tips). Entries are hash-chained so
+  gaps or tampering are detectable.
+- Git's content-addressed history means any change to past commits
+  changes their identifiers, which the recorded ref tips would expose.
+
+### 6.5 Package integrity (offline dependencies)
+
+- A read-only local mirror of needed packages (Maven, npm, PyPI), served
+  by tools such as a Maven repository manager, Verdaccio, and devpi.
+  These are candidates to evaluate, not decisions.
+- The mirror is populated only from signed snapshots. Snapshots are built
+  on the connected side from project lockfiles, scanned under the
+  organization's policy, signed, then imported through the same verified
+  path as source bundles.
+- Lockfiles with integrity hashes wherever the ecosystem supports them,
+  so any mismatch fails the build.
+- Versioned snapshots allow rollback. The snapshot date is shown to
+  developers so staleness is visible.
+- OS and toolchain image updates follow the same pattern: signed, with a
+  rollback slot.
+
+### 6.6 Loss and theft
+
+Encrypted storage protects content. Because the authoritative repository
+lives elsewhere, losing a device costs only unsynced work. Each
+environment should state a maximum acceptable unsynced window and export
+regularly. Remote wipe is not possible in an air gap, and this design
+does not claim it.
+
+### 6.7 Low-connectivity and travel use (secondary)
+
+A laptop with a local clone can already work offline, so this is not the
+strongest case for the device. What the device adds is a consistent
+toolchain and keeping source off the host. It works as store-and-forward:
+changes and dependency needs queue on the device, and when connectivity
+returns and policy allows, the user explicitly triggers a sync, either
+ordinary Git operations against the real remote or bundles. There is no
+background sync by default. The air-gapped case remains the primary
+target.
+
+### 6.8 Open questions
+
+- Which transfer channels and gateways real sites actually approve.
+- Key custody and rotation for signers and the device key.
+- Behavior of large monorepos, submodules, and Git LFS objects in
+  bundles.
+- Who reviews inbound changes, and how this fits existing change control.
+
+---
+
+## 7. Risks and Open Questions
 
 | Risk or open question | Mitigation direction |
 |---|---|
@@ -172,10 +267,12 @@ policy will not be adopted.
 | Local model quality ceiling | Tiered design: local for fast tasks, optional cloud for deep ones |
 | IDE plugin support in a headless backend | Scope to a known-working subset and document it |
 | Overlap with existing remote-dev tooling | Position as a deployment target for it, not a replacement |
+| Source drift or tampering across the sync boundary | Signed bundles and commits, quarantine import, hash-chained sync ledger |
+| Stale or tampered dependencies | Signed snapshots, lockfile integrity hashes, visible snapshot date, rollback |
 
 ---
 
-## 7. Prototype Plan
+## 8. Prototype Plan
 
 1. **Weeks 1-4:** USB gadget mode on a small ARM board (Raspberry Pi Zero
    2 W or Radxa Zero) serving a minimal web page to Windows, macOS, and
@@ -184,10 +281,13 @@ policy will not be adopted.
    draw. Publish the numbers, including unflattering ones.
 3. **Weeks 9-12:** Add local model completion, then the optional cloud
    bridge. Record a demo that works with the network unplugged.
+4. **Weeks 13-16:** Signed bundle round trip (export, verify, import)
+   against a reference repository, plus a read-only dependency mirror
+   populated from a signed snapshot.
 
 ---
 
-## 8. Related Work
+## 9. Related Work
 
 - **JetBrains Remote Development / Gateway:** the architecture this
   project extends to a USB-attached backend.
@@ -201,7 +301,7 @@ policy will not be adopted.
 
 ---
 
-## 9. Summary
+## 10. Summary
 
 Compute Plug IDE does not require a new IDE architecture. It proposes a
 new transport and hardware boundary for the client-server model that
